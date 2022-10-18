@@ -3,19 +3,22 @@ package org.example;
 import twitter4j.Twitter;
 import twitter4j.TwitterException;
 import twitter4j.v1.Query;
-import twitter4j.v1.QueryResult;
 import twitter4j.v1.Status;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.LocalTime;
+import java.time.*;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class MostLikedBot {
-    private final Twitter twitter;
     private static final int MAX_TWEET_COUNT = 15;
+    private static final int INITIAL_MIN_FAVE = 100000;
+    private static final int RETWEET_TIME_HOUR = 23;
+    private static final int RETWEET_TIME_MINUTE = 59;
+    private static final int RETWEET_TIME_SECOND = 30;
+
+    private final Twitter twitter;
 
     public MostLikedBot() {
         twitter = Twitter.newBuilder()
@@ -24,77 +27,120 @@ public class MostLikedBot {
                 .build();
     }
 
-    // runs the bot indefinitely, every night retweeting the most popular tweet for the day seconds before midnight
-    public void run() throws TwitterException, InterruptedException {
+    /**
+     * Runs the bot indefinitely, finding and retweeting the most liked tweet every day.
+     * <p>
+     * Retweets happen every day at a configured time {@link #RETWEET_TIME_HOUR} RETWEET_TIME_HOUR,
+     * {@link #RETWEET_TIME_MINUTE} RETWEET_TIME_MINUTE and {@link #RETWEET_TIME_SECOND} RETWEET_TIME_SECOND.
+     *
+     * @throws InterruptedException happens when sleeping (waiting) is interrupted (in this case, by user only)
+     */
+    public void run() throws InterruptedException {
         while (true) {
-            long delay = ChronoUnit.SECONDS.between(LocalTime.now(Clock.systemUTC()), LocalTime.of(23, 59, 30));
-            delay = delay < 0 ? 86400 + delay : delay; // need to make sure delay is positive (86400 seconds = 1 day)
+            // Compute how much time (in seconds) we have to wait for the next retweet
+            ZonedDateTime zdtNow = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
+            ZonedDateTime retweetAt = ZonedDateTime.of(zdtNow.getYear(), zdtNow.getMonthValue(), zdtNow.getDayOfMonth(),
+                    RETWEET_TIME_HOUR, RETWEET_TIME_MINUTE, RETWEET_TIME_SECOND, 0, ZoneOffset.UTC);
+            long delay = ChronoUnit.SECONDS.between(zdtNow, retweetAt);
+            delay = delay < 0 ? 86400 + delay : delay; // the delay must be a positive number
+
+            // Wait for the retweet
             TimeUnit.SECONDS.sleep(delay);
 
-            long tweetId = determineMostPopularTweet();
+            // Retweet now and continue with next delay
+            long tweetId = determineMostLikedTweet();
             retweetTweet(tweetId);
-
-            TimeUnit.MINUTES.sleep(1);
         }
     }
 
-    // Determines the most liked tweet for today
-    private long determineMostPopularTweet() throws TwitterException {
-        // Initial query that "tries the waters out" with the initial value of minimum likes (minFaves)
-        // We must do this to get an understanding of how we should adjust minimum likes value later
-        int minFaves = 100000;
-        String todayIs = Instant.now().toString().substring(8, 10);
+    /**
+     * Searches for tweets with filtering
+     * <p>
+     * Given the number of minimum likes and the day of a month, returns a list of tweets that
+     * have at least the specified number of likes and have been created at the specified day of the month
+     * or later (but not sooner).
+     *
+     * @param minFaves the minimum number of likes allowed for a tweet
+     * @param since    the day of a month
+     * @return         a sample of tweets that match the specified requirements
+     */
+    private List<Status> searchTweets(int minFaves, int since) {
+        Query query = Query.of(String.format("min_faves:%s lang:en since:2022-10-%s", minFaves, since));
+        try {
+            return twitter.v1().search().search(query).getTweets();
+        } catch (TwitterException ignored) {
+            System.out.println("Query for tweet search has failed. It might have an incorrect form.");
+            return new ArrayList<>();
+        }
+    }
 
-        Query query = Query.of(String.format("min_faves:%s lang:en since:2022-10-%s", minFaves, todayIs));
+    /**
+     * Searches for and determines the current most liked tweet of the day.
+     * <p>
+     * Given an initial value of minimum allowed likes for a tweet {@link #INITIAL_MIN_FAVE} INITIAL_MIN_FAVE
+     * this method looks for tweets that have more likes than the given value, while iteratively increasing the value
+     * until only one tweet is left (that tweet is the current most liked tweet)
+     *
+     * @return         id of the most liked tweet
+     */
+    private long determineMostLikedTweet() {
+        int minFaves = INITIAL_MIN_FAVE;
+        int todayIs = ZonedDateTime.now(ZoneOffset.UTC).getDayOfMonth();
 
-        QueryResult result = twitter.v1().search().search(query);
-        List<Status> tweets = result.getTweets();
+        List<Status> tweets = searchTweets(minFaves, todayIs);
 
-        // Cases when the initial minimum likes is set too big -> we must reduce it until we start getting
-        // tweet matches
+        // Case when the initial minimum likes is set too big -> we must reduce it until we start getting
+        // at least one tweet match
         while (tweets.size() < 1) {
             minFaves /= 2;
-            query = Query.of(String.format("min_faves:%s lang:en since:2022-10-%s", minFaves, todayIs));
-            result = twitter.v1().search().search(query);
-            tweets = result.getTweets();
+            tweets = searchTweets(minFaves, todayIs);
         }
 
+        // Tracking the maximum number of likes encountered in a tweet
         int maxLikes = tweets.get(0).getFavoriteCount();
         long maxId = tweets.get(0).getId();
 
-        // Now that we are finally getting tweets, we will start increasing the minimum likes value until
+        // We are guaranteed to be getting tweets now, we will start increasing the minimum likes value until
         // we are left with only one tweet -> it is guaranteed to have the largest number of likes
         do {
             for (Status tweet : tweets) {
-//                printTweet(twitter, tweet.getId());
-
                 if (tweet.getFavoriteCount() > maxLikes) {
                     maxLikes = tweet.getFavoriteCount();
                     maxId = tweet.getId();
                 }
             }
-
-            query = Query.of(String.format("min_faves:%s lang:en since:2022-10-%s", maxLikes, todayIs));
-            result = twitter.v1().search().search(query);
-            tweets = result.getTweets();
-        }
-        while (tweets.size() == MAX_TWEET_COUNT);
+            tweets = searchTweets(maxLikes, todayIs);
+        } while (tweets.size() == MAX_TWEET_COUNT);
         return maxId;
     }
 
+    /**
+     * Retweets and likes a specified tweet
+     * <p>
+     * Retweets and likes a specified tweet while providing additional feedback on the conclusion of
+     * the request (whether it succeeded or not)
+     *
+     * @param tweetId id of the tweet
+     */
     private void retweetTweet(long tweetId) {
         try {
-            twitter.v1().tweets().retweetStatus(tweetId);
-            twitter.v1().favorites().createFavorite(tweetId);
+            twitter.v1().tweets().retweetStatus(tweetId);     // retweet the tweet
+            twitter.v1().favorites().createFavorite(tweetId); // we also give it a like
             System.out.println("Retweet SUCCESSFUL!");
             printTweet(tweetId);
         } catch (TwitterException ignored) {
-            // Case when the tweet has already been retweeted
             System.out.println("Retweet FAILED!");
             System.out.println("Tweet has already been retweeted or not found! Doing nothing...");
         }
     }
 
+    /**
+     * Provides information about any specified tweet
+     * <p>
+     * Gives information about the tweet's id, creation date, user who posted, like and retweet counts.
+     *
+     * @param tweetId id of the tweet
+     */
     private void printTweet(long tweetId) {
         try {
             Status tweet = twitter.v1().tweets().lookup(tweetId).get(0);
@@ -105,7 +151,7 @@ public class MostLikedBot {
             System.out.println("Retweets: " + tweet.getRetweetCount());
             System.out.println();
 
-        } catch (TwitterException e) {
+        } catch (TwitterException ignored) {
             System.out.println("Tweet not found!");
         }
     }
