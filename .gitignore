@@ -37,4 +37,4 @@ build/
 ### Mac OS ###
 .DS_Store
 /src/main/java/org/example/Secrets.java
-/retweet-logs.txt
+/bot-log.txt

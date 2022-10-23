@@ -5,19 +5,24 @@ import twitter4j.TwitterException;
 import twitter4j.v1.Query;
 import twitter4j.v1.Status;
 
+import java.text.NumberFormat;
 import java.time.*;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 public class MostLikedBot {
     private static final int MAX_TWEET_COUNT = 15;
     private static final int INITIAL_MIN_FAVE = 100000;
-    private static final int RETWEET_TIME_HOUR = 23;
-    private static final int RETWEET_TIME_MINUTE = 59;
-    private static final int RETWEET_TIME_SECOND = 30;
-
+    private static final int TWEET_TIME_HOUR = 15;
+    private static final int TWEET_TIME_MINUTE = 59;
+    private static final int TWEET_TIME_SECOND = 30;
+    private static final long OVERHEAD_SECONDS = 15;
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy/MM/dd - HH:mm:ss");
+    private static final String HASHTAGS = "#Trending #Tweet #TrendingNow #Bot #Bots";
     private final Twitter twitter;
 
     public MostLikedBot() {
@@ -28,28 +33,41 @@ public class MostLikedBot {
     }
 
     /**
-     * Runs the bot indefinitely, finding and retweeting the most liked tweet every day.
+     * Runs the bot indefinitely, finding and quote tweeting the most liked tweet every day.
      * <p>
-     * Retweets happen every day at a configured time {@link #RETWEET_TIME_HOUR} RETWEET_TIME_HOUR,
-     * {@link #RETWEET_TIME_MINUTE} RETWEET_TIME_MINUTE and {@link #RETWEET_TIME_SECOND} RETWEET_TIME_SECOND.
+     * Quote tweets happen every day at a configured time {@link #TWEET_TIME_HOUR} TWEET_TIME_HOUR,
+     * {@link #TWEET_TIME_MINUTE} TWEET_TIME_MINUTE and {@link #TWEET_TIME_SECOND} TWEET_TIME_SECOND.
      *
      * @throws InterruptedException happens when sleeping (waiting) is interrupted (in this case, by user only)
      */
     public void run() throws InterruptedException {
+        ZonedDateTime zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
+        System.out.println("Bot started: " + zdtNow.format(DATE_FORMATTER) + " (UTC)");
+
+        // Add a shutdown hook to provide log information about time when the bot has stopped working
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            ZonedDateTime zdtShutdown = ZonedDateTime.now(ZoneOffset.UTC);
+            System.out.println("Bot stopped/interrupted: " + zdtShutdown.format(DATE_FORMATTER) + " (UTC)");
+        }));
+
         while (true) {
-            // Compute how much time (in seconds) we have to wait for the next retweet
-            ZonedDateTime zdtNow = ZonedDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
-            ZonedDateTime retweetAt = ZonedDateTime.of(zdtNow.getYear(), zdtNow.getMonthValue(), zdtNow.getDayOfMonth(),
-                    RETWEET_TIME_HOUR, RETWEET_TIME_MINUTE, RETWEET_TIME_SECOND, 0, ZoneOffset.UTC);
-            long delay = ChronoUnit.SECONDS.between(zdtNow, retweetAt);
-            delay = delay < 0 ? 86400 + delay : delay; // the delay must be a positive number
+            // Compute how much time (in seconds) we have to wait for the next bot tweet
+            zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
+            ZonedDateTime tweetAt = ZonedDateTime.of(zdtNow.getYear(), zdtNow.getMonthValue(), zdtNow.getDayOfMonth(),
+                    TWEET_TIME_HOUR, TWEET_TIME_MINUTE, TWEET_TIME_SECOND, 0, ZoneOffset.UTC);
+            long delay = ChronoUnit.SECONDS.between(zdtNow, tweetAt);
+            delay = delay <= 0 ? 86400 + delay : delay; // the delay must be greater than 0
 
-            // Wait for the retweet
-            TimeUnit.SECONDS.sleep(delay);
-
-            // Retweet now and continue with next delay
+            // Give some overhead to determine the most liked tweet of the day before tweeting precisely on time
+            TimeUnit.SECONDS.sleep(delay - OVERHEAD_SECONDS);
             long tweetId = determineMostLikedTweet();
-            retweetTweet(tweetId);
+
+            // Tweet precisely on time, specified by the TWEET_TIME constants!
+            zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
+            TimeUnit.SECONDS.sleep(ChronoUnit.SECONDS.between(zdtNow, tweetAt));
+            quoteTweet(tweetId);
+            likeTweet(tweetId);
+            printTweet(tweetId);
         }
     }
 
@@ -62,10 +80,10 @@ public class MostLikedBot {
      *
      * @param minFaves the minimum number of likes allowed for a tweet
      * @param since    the day of a month
-     * @return         a sample of tweets that match the specified requirements
+     * @return a sample of tweets that match the specified requirements
      */
     private List<Status> searchTweets(int minFaves, int since) {
-        Query query = Query.of(String.format("min_faves:%s lang:en since:2022-10-%s", minFaves, since));
+        Query query = Query.of(String.format("min_faves:%d lang:en since:2022-10-%d", minFaves, since));
         try {
             return twitter.v1().search().search(query).getTweets();
         } catch (TwitterException ignored) {
@@ -81,9 +99,10 @@ public class MostLikedBot {
      * this method looks for tweets that have more likes than the given value, while iteratively increasing the value
      * until only one tweet is left (that tweet is the current most liked tweet)
      *
-     * @return         id of the most liked tweet
+     * @return id of the most liked tweet
      */
     private long determineMostLikedTweet() {
+        System.out.println("Determining the most liked tweet of the day...");
         int minFaves = INITIAL_MIN_FAVE;
         int todayIs = ZonedDateTime.now(ZoneOffset.UTC).getDayOfMonth();
 
@@ -111,26 +130,75 @@ public class MostLikedBot {
             }
             tweets = searchTweets(maxLikes, todayIs);
         } while (tweets.size() == MAX_TWEET_COUNT);
+        System.out.println("Tweet (" + maxId + ") is the most liked tweet of the day!");
         return maxId;
     }
 
     /**
-     * Retweets and likes a specified tweet
+     * Likes a specified tweet
      * <p>
-     * Retweets and likes a specified tweet while providing additional feedback on the conclusion of
+     * Likes a specified tweet while providing additional feedback on the conclusion of
+     * the request (whether it succeeded or not)
+     *
+     * @param tweetId id of the tweet
+     */
+    private void likeTweet(long tweetId) {
+        try {
+            twitter.v1().favorites().createFavorite(tweetId);
+            System.out.println("Tweet (" + tweetId + ") has been liked!");
+        } catch (TwitterException ignored) {
+            System.out.println("Tweet (" + tweetId + ") has already been liked before - ignoring request!");
+        }
+    }
+
+    /**
+     * Retweets a specified tweet
+     * <p>
+     * Retweets a specified tweet while providing additional feedback on the conclusion of
      * the request (whether it succeeded or not)
      *
      * @param tweetId id of the tweet
      */
     private void retweetTweet(long tweetId) {
         try {
-            twitter.v1().tweets().retweetStatus(tweetId);     // retweet the tweet
-            twitter.v1().favorites().createFavorite(tweetId); // we also give it a like
-            System.out.println("Retweet SUCCESSFUL!");
-            printTweet(tweetId);
+            twitter.v1().tweets().retweetStatus(tweetId);
+            System.out.println("Tweet (" + tweetId + ") has been retweeted!");
         } catch (TwitterException ignored) {
-            System.out.println("Retweet FAILED!");
-            System.out.println("Tweet has already been retweeted or not found! Doing nothing...");
+            System.out.println("Tweet (" + tweetId + ") has already been retweeted or not found - ignoring request!");
+        }
+    }
+
+    /**
+     * Quote tweets a specified tweet
+     * <p>
+     * Quote tweets a specified tweet while providing additional feedback on the conclusion of
+     * the request (whether it succeeded or not)
+     *
+     * @param tweetId id of the tweet
+     */
+    private void quoteTweet(long tweetId) {
+        try {
+            Status tweetToBeQuoted = twitter.v1().tweets().lookup(tweetId).get(0);
+            String tweetUrl = "https://twitter.com/" + tweetToBeQuoted.getUser().getScreenName() + "/status/" + tweetId;
+
+            String userTag = tweetToBeQuoted.getUser().getScreenName();
+            String tweetDate = tweetToBeQuoted.getCreatedAt().atZone(ZoneOffset.UTC).format(DATE_FORMATTER);
+            String likeCount = NumberFormat.getNumberInstance(Locale.US).format(tweetToBeQuoted.getFavoriteCount());
+            String retweetCount = NumberFormat.getNumberInstance(Locale.US).format(tweetToBeQuoted.getRetweetCount());
+
+            String quoteTweet = String.format(
+                    "This is the most liked tweet of the day!\n" +
+                            "\u2022  Tweeted by: @%s\n" +
+                            "\u2022  Tweeted at: %s (UTC)\n" +
+                            "\u2022  %s likes \u2764\n" +
+                            "\u2022  %s retweets \uD83D\uDD01\n" +
+                            "%s\n" +
+                            "%s",
+                    userTag, tweetDate, likeCount, retweetCount, HASHTAGS, tweetUrl);
+            twitter.v1().tweets().updateStatus(quoteTweet);
+            System.out.println("Tweet (" + tweetId + ") has been quote tweeted!");
+        } catch (TwitterException ignored) {
+            System.out.println("Quote tweet for (" + tweetId + ") has failed - ignoring request!");
         }
     }
 
@@ -148,11 +216,10 @@ public class MostLikedBot {
             System.out.println("Created at: " + tweet.getCreatedAt().toString());
             System.out.println("User: @" + tweet.getUser().getScreenName() + " - " + tweet.getText());
             System.out.println("Likes: " + tweet.getFavoriteCount());
-            System.out.println("Retweets: " + tweet.getRetweetCount());
-            System.out.println();
+            System.out.println("Retweets: " + tweet.getRetweetCount() + "\n");
 
         } catch (TwitterException ignored) {
-            System.out.println("Tweet not found!");
+            System.out.println("Printing tweet (" + tweetId + ") has failed - ignoring request!\n");
         }
     }
 }
