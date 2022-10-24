@@ -1,16 +1,14 @@
 package org.example;
 
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.PrintStream;
+import com.google.cloud.functions.HttpFunction;
+import com.google.cloud.functions.HttpRequest;
+import com.google.cloud.functions.HttpResponse;
 
-public class App {
-    public static void main(String[] args) throws InterruptedException, FileNotFoundException {
-        PrintStream out = new PrintStream(
-                new FileOutputStream("bot-log.txt", true));
-        System.setOut(out);
+public class App implements HttpFunction {
+    private final MostLikedBot bot = new MostLikedBot();
 
-        MostLikedBot bot = new MostLikedBot();
+    @Override
+    public void service(HttpRequest httpRequest, HttpResponse httpResponse) {
         bot.run();
     }
 }

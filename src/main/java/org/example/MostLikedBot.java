@@ -8,19 +8,13 @@ import twitter4j.v1.Status;
 import java.text.NumberFormat;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.TimeUnit;
 
 public class MostLikedBot {
     private static final int MAX_TWEET_COUNT = 15;
     private static final int INITIAL_MIN_FAVE = 100000;
-    private static final int TWEET_TIME_HOUR = 15;
-    private static final int TWEET_TIME_MINUTE = 59;
-    private static final int TWEET_TIME_SECOND = 30;
-    private static final long OVERHEAD_SECONDS = 15;
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy/MM/dd - HH:mm:ss");
     private static final String HASHTAGS = "#Trending #Tweet #TrendingNow #Bot #Bots";
     private final Twitter twitter;
@@ -33,42 +27,15 @@ public class MostLikedBot {
     }
 
     /**
-     * Runs the bot indefinitely, finding and quote tweeting the most liked tweet every day.
+     * Finds and quote tweets the most liked tweet of the day
      * <p>
-     * Quote tweets happen every day at a configured time {@link #TWEET_TIME_HOUR} TWEET_TIME_HOUR,
-     * {@link #TWEET_TIME_MINUTE} TWEET_TIME_MINUTE and {@link #TWEET_TIME_SECOND} TWEET_TIME_SECOND.
-     *
-     * @throws InterruptedException happens when sleeping (waiting) is interrupted (in this case, by user only)
+     * The tweet is also liked and information about it is provided afterwards
      */
-    public void run() throws InterruptedException {
-        ZonedDateTime zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
-        System.out.println("Bot started: " + zdtNow.format(DATE_FORMATTER) + " (UTC)");
-
-        // Add a shutdown hook to provide log information about time when the bot has stopped working
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            ZonedDateTime zdtShutdown = ZonedDateTime.now(ZoneOffset.UTC);
-            System.out.println("Bot stopped/interrupted: " + zdtShutdown.format(DATE_FORMATTER) + " (UTC)");
-        }));
-
-        while (true) {
-            // Compute how much time (in seconds) we have to wait for the next bot tweet
-            zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
-            ZonedDateTime tweetAt = ZonedDateTime.of(zdtNow.getYear(), zdtNow.getMonthValue(), zdtNow.getDayOfMonth(),
-                    TWEET_TIME_HOUR, TWEET_TIME_MINUTE, TWEET_TIME_SECOND, 0, ZoneOffset.UTC);
-            long delay = ChronoUnit.SECONDS.between(zdtNow, tweetAt);
-            delay = delay <= 0 ? 86400 + delay : delay; // the delay must be greater than 0
-
-            // Give some overhead to determine the most liked tweet of the day before tweeting precisely on time
-            TimeUnit.SECONDS.sleep(delay - OVERHEAD_SECONDS);
-            long tweetId = determineMostLikedTweet();
-
-            // Tweet precisely on time, specified by the TWEET_TIME constants!
-            zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
-            TimeUnit.SECONDS.sleep(ChronoUnit.SECONDS.between(zdtNow, tweetAt));
-            quoteTweet(tweetId);
-            likeTweet(tweetId);
-            printTweet(tweetId);
-        }
+    public void run()  {
+        long tweetId = determineMostLikedTweet();
+        quoteTweet(tweetId);
+        likeTweet(tweetId);
+        printTweet(tweetId);
     }
 
     /**
