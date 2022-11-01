@@ -35,6 +35,7 @@ public class MostLikedBot {
         long tweetId = determineMostLikedTweet();
         quoteTweet(tweetId);
         likeTweet(tweetId);
+        followTweetPoster(tweetId);
         printTweet(tweetId);
     }
 
@@ -99,6 +100,23 @@ public class MostLikedBot {
         } while (tweets.size() == MAX_TWEET_COUNT);
         System.out.println("Tweet (" + maxId + ") is the most liked tweet of the day!");
         return maxId;
+    }
+
+    /**
+     * Follows the poster of the specified tweet
+     * <p>
+     * Follows the poster of the specified tweet while providing additional feedback on the conclusion of
+     * the request (whether it succeeded or not)
+     *
+     * @param tweetId id of the tweet
+     */
+    private void followTweetPoster(long tweetId) {
+        try {
+            Status tweet = twitter.v1().tweets().lookup(tweetId).get(0);
+            twitter.v1().friendsFollowers().createFriendship(tweet.getUser().getId());
+        } catch (TwitterException ignored) {
+            System.out.println("Following the owner of tweet (" + tweetId + ") has failed - ignoring request!");
+        }
     }
 
     /**
