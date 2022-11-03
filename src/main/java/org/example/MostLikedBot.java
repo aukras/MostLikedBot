@@ -17,11 +17,12 @@ import java.util.concurrent.TimeUnit;
 public class MostLikedBot {
     private static final int MAX_TWEET_COUNT = 15;
     private static final int INITIAL_MIN_FAVE = 100000;
-    private static final int TWEET_TIME_HOUR = 15;
+    private static final int TWEET_TIME_HOUR = 23;
     private static final int TWEET_TIME_MINUTE = 59;
-    private static final int TWEET_TIME_SECOND = 30;
+    private static final int TWEET_TIME_SECOND = 59;
     private static final long OVERHEAD_SECONDS = 15;
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy/MM/dd - HH:mm:ss");
+    private static final DateTimeFormatter DATE_FORMATTER_WITH_TIME = DateTimeFormatter.ofPattern("yyyy/MM/dd - HH:mm:ss");
+    private static final DateTimeFormatter DATE_FORMATTER_NO_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final String HASHTAGS = "#Trending #Tweet #TrendingNow #Bot #Bots";
     private final Twitter twitter;
 
@@ -42,12 +43,12 @@ public class MostLikedBot {
      */
     public void run() throws InterruptedException {
         ZonedDateTime zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
-        System.out.println("Bot started: " + zdtNow.format(DATE_FORMATTER) + " (UTC)");
+        System.out.println("Bot started: " + zdtNow.format(DATE_FORMATTER_WITH_TIME) + " (UTC)");
 
         // Add a shutdown hook to provide log information about time when the bot has stopped working
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             ZonedDateTime zdtShutdown = ZonedDateTime.now(ZoneOffset.UTC);
-            System.out.println("Bot stopped/interrupted: " + zdtShutdown.format(DATE_FORMATTER) + " (UTC)");
+            System.out.println("Bot stopped/interrupted: " + zdtShutdown.format(DATE_FORMATTER_WITH_TIME) + " (UTC)");
         }));
 
         while (true) {
@@ -75,16 +76,16 @@ public class MostLikedBot {
     /**
      * Searches for tweets with filtering
      * <p>
-     * Given the number of minimum likes and the day of a month, returns a list of tweets that
-     * have at least the specified number of likes and have been created at the specified day of the month
+     * Given the number of minimum likes and a date string (YYYY-MM-DD), returns a sample of tweets that
+     * have at least the specified number of likes and have been created at the specified date
      * or later (but not sooner).
      *
      * @param minFaves the minimum number of likes allowed for a tweet
-     * @param since    the day of a month
+     * @param since    the date string (YYYY-MM-DD)
      * @return a sample of tweets that match the specified requirements
      */
-    private List<Status> searchTweets(int minFaves, int since) {
-        Query query = Query.of(String.format("min_faves:%d lang:en since:2022-10-%d", minFaves, since));
+    private List<Status> searchTweets(int minFaves, String since) {
+        Query query = Query.of(String.format("min_faves:%d lang:en since:%s", minFaves, since));
         try {
             return twitter.v1().search().search(query).getTweets();
         } catch (TwitterException ignored) {
@@ -105,15 +106,15 @@ public class MostLikedBot {
     private long determineMostLikedTweet() {
         System.out.println("Determining the most liked tweet of the day...");
         int minFaves = INITIAL_MIN_FAVE;
-        int todayIs = ZonedDateTime.now(ZoneOffset.UTC).getDayOfMonth();
-
-        List<Status> tweets = searchTweets(minFaves, todayIs);
+        ZonedDateTime zdtNow = ZonedDateTime.now(ZoneOffset.UTC);
+        String since = zdtNow.format(DATE_FORMATTER_NO_TIME);
+        List<Status> tweets = searchTweets(minFaves, since);
 
         // Case when the initial minimum likes is set too big -> we must reduce it until we start getting
         // at least one tweet match
         while (tweets.size() < 1) {
             minFaves /= 2;
-            tweets = searchTweets(minFaves, todayIs);
+            tweets = searchTweets(minFaves, since);
         }
 
         // Tracking the maximum number of likes encountered in a tweet
@@ -129,7 +130,7 @@ public class MostLikedBot {
                     maxId = tweet.getId();
                 }
             }
-            tweets = searchTweets(maxLikes, todayIs);
+            tweets = searchTweets(maxLikes, since);
         } while (tweets.size() == MAX_TWEET_COUNT);
         System.out.println("Tweet (" + maxId + ") is the most liked tweet of the day!");
         return maxId;
@@ -200,7 +201,7 @@ public class MostLikedBot {
             String tweetUrl = "https://twitter.com/" + tweetToBeQuoted.getUser().getScreenName() + "/status/" + tweetId;
 
             String userTag = tweetToBeQuoted.getUser().getScreenName();
-            String tweetDate = tweetToBeQuoted.getCreatedAt().atZone(ZoneOffset.UTC).format(DATE_FORMATTER);
+            String tweetDate = tweetToBeQuoted.getCreatedAt().atZone(ZoneOffset.UTC).format(DATE_FORMATTER_WITH_TIME);
             String likeCount = NumberFormat.getNumberInstance(Locale.US).format(tweetToBeQuoted.getFavoriteCount());
             String retweetCount = NumberFormat.getNumberInstance(Locale.US).format(tweetToBeQuoted.getRetweetCount());
 
